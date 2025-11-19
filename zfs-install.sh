@@ -1,7 +1,8 @@
 #!/bin/bash
-
+#
 # Debian 13 (Trixie) ZFS root installer (native ZFS, optional encryption)
 #
+# - Run from a Debian 13 *live* system, as root
 # - Root on ZFS (bpool + rpool)
 # - Optional native ZFS encryption on rpool (no LUKS)
 # - Locale: en_CA.UTF-8
@@ -22,6 +23,30 @@
 # WARNING: This is DESTRUCTIVE on the selected disks.
 
 set -euo pipefail
+
+# --- Must be root -----------------------------------------------------------
+
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root. Use: sudo -i; then ./zfs-install.sh"
+  exit 1
+fi
+
+# --- Fix live system APT sources (add contrib/non-free) ---------------------
+
+echo "--- Configuring live-system APT sources for Debian 13 (trixie) ---"
+
+cat > /etc/apt/sources.list << 'EOF_LIVE_SOURCES'
+deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+
+deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+deb-src http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+
+deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
+EOF_LIVE_SOURCES
+
+apt update
 
 # --- Check required packages in LIVE environment ----------------------------
 
@@ -52,7 +77,6 @@ if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
 
   if [[ "$INSTALL_CONFIRM" == "y" ]]; then
     echo "--- Installing missing required packages ---"
-    apt update
     apt install -y "${MISSING_PKGS[@]}"
   else
     echo "ERROR: Cannot proceed without required packages."
@@ -60,6 +84,15 @@ if [ ${#MISSING_PKGS[@]} -gt 0 ]; then
   fi
 else
   echo "All required packages are present."
+fi
+
+# Make sure the ZFS kernel module is available
+
+echo "--- Loading ZFS kernel module ---"
+if ! modprobe zfs 2>/dev/null; then
+  echo "ERROR: Could not load ZFS kernel module (modprobe zfs failed)."
+  echo "Make sure zfsutils-linux (and its dependencies, e.g. zfs-dkms) are installed correctly."
+  exit 1
 fi
 
 # --- Hostname / domain ------------------------------------------------------
@@ -116,16 +149,7 @@ fi
 
 # --- Disk detection ---------------------------------------------------------
 
-DISKS=$(lsblk -ndo NAME,SIZE,TYPE,MODEL | grep -v "loop" | grep -v "sr" | awk '{if ($3 == "disk") print $1}')
-
-if [ -z "$DISKS" ]; then
-  echo "Attempting alternative disk detection..." >&2
-  DISKS=$(lsblk -ndo NAME | grep -v "loop" | grep -v "sr" | while read -r LINE; do
-    if [[ "$LINE" =~ ^[shv]d[a-z]$ ]]; then
-      echo "$LINE"
-    fi
-  done)
-fi
+DISKS=$(lsblk -ndo NAME,SIZE,TYPE,MODEL | awk '$3=="disk"{print $1}')
 
 if [ -z "$DISKS" ]; then
   echo "No physical hard drives found on the system."
@@ -394,7 +418,7 @@ else
 fi
 
 echo "---"
-echo "ZFS operations completed."
+echo "ZFS pool creation completed."
 echo "Starting Debian 13 (Trixie) operating system installation phase..."
 
 # --- Filesystems and debootstrap -------------------------------------------
@@ -451,14 +475,14 @@ cp /etc/network/interfaces /mnt/etc/network/interfaces || \
 
 echo "Configuring /mnt/etc/apt/sources.list..."
 cat << 'EOF_SOURCES' > /mnt/etc/apt/sources.list
-deb http://deb.debian.org/debian trixie main contrib non-free-firmware
-deb-src http://deb.debian.org/debian trixie main contrib non-free-firmware
+deb http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian trixie main contrib non-free non-free-firmware
 
-deb http://security.debian.org/debian-security trixie-security main contrib non-free-firmware
-deb-src http://security.debian.org/debian-security trixie-security main contrib non-free-firmware
+deb http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
+deb-src http://security.debian.org/debian-security trixie-security main contrib non-free non-free-firmware
 
-deb http://deb.debian.org/debian trixie-updates main contrib non-free-firmware
-deb-src http://deb.debian.org/debian trixie-updates main contrib non-free-firmware
+deb http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
+deb-src http://deb.debian.org/debian trixie-updates main contrib non-free non-free-firmware
 EOF_SOURCES
 
 echo "Mounting virtual directories for chroot environment..."
